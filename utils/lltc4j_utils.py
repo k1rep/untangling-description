@@ -68,15 +68,56 @@ def check_tangled_commits(data):
 
     # Marking commits as tangled or not-tangled based on the number of unique types
     results = {revision: "tangled" if len(types) > 1 else "not-tangled" for revision, types in commit_labels.items()}
-    print(len(results))
+    print(f"Total commits: {len(commit_labels)}")
     return results
+
+
+def construct_final_data():
+    uri = create_mongodb_uri_string(**credentials)
+    connect(database_name, host=uri, alias='default')
+    with open('../data/hunk_labels.json', 'r') as file:
+        data = json_util.loads(file.read())
+        tangled_results = check_tangled_commits(data)
+
+        # Creating a mapping of revision_hash to associated hunk_ids
+        revision_to_hunks = {}
+        for item in data:
+            hunk_id = item['hunk_id']
+            revision = item.get('revision_hash')
+            if revision:
+                if revision not in revision_to_hunks:
+                    revision_to_hunks[revision] = []
+                revision_to_hunks[revision].append(hunk_id)
+
+        # Constructing tuples <commit_hash, commit_message, code_change_content, tangled_label>
+        final_data = []
+        for revision, hunk_ids in revision_to_hunks.items():
+            # Fetch commit data
+            commit = Commit.objects(revision_hash=revision).only('message').first()
+            commit_message = commit.message if commit else "N/A"
+
+            # Fetch hunk data
+            code_change_content = []
+            for hunk_id in hunk_ids:
+                hunk = Hunk.objects(id=hunk_id).only('content').first()
+                if hunk:
+                    code_change_content.append(hunk.content)
+
+            tangled_label = tangled_results.get(revision, "not-tangled")
+            final_tuple = (
+                revision,
+                commit_message,
+                code_change_content,
+                tangled_label
+            )
+            final_data.append(final_tuple)
+
+        # Save results to disk
+        with open('../data/final_data.json', 'w') as file:
+            file.write(json_util.dumps(final_data))
 
 
 if __name__ == '__main__':
     # generate_hunk_labels()
-    with open('../data/hunk_labels.json', 'r') as file:
-        data = json_util.loads(file.read())
-        results = check_tangled_commits(data)
-        # save results to disk
-        with open('../data/tangled_commits.json', 'w') as file:
-            file.write(json_util.dumps(results))
+    construct_final_data()
+
